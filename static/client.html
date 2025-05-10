@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Person Tracker Client</title>
+    <style>
+      body { font-family: sans-serif; max-width: 800px; margin: 20px auto; }
+
+      #video { width: 100%; max-width: 640px; border: 1px solid #ccc; }
+
+      section { margin-top: 20px; }
+
+      button { margin-right: 8px; padding: 6px 12px; }
+
+      pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
+
+      .hidden { display: none; }
+
+      #error { color: red; }
+    </style>
+  </head>
+  <body>
+
+    <h1>Person Tracker Client</h1>
+    <div id="error"></div>
+
+    <section id="upload-section">
+      <form id="upload-form">
+        <input type="file" id="file-input" accept="video/*" required />
+        <button type="submit">Загрузить и старт</button>
+      </form>
+    </section>
+
+    <section id="session-section" class="hidden">
+      <p><strong>Session ID:</strong> <span id="session-id"></span></p>
+      <button id="btn-stats">Получить статистику</button>
+      <button id="btn-stop">Остановить сессию</button>
+
+      <div>
+        <h3>Live видеопоток:</h3>
+        <img id="video" alt="Live frame" />
+      </div>
+      <div>
+        <h3>Треки:</h3>
+        <ul id="tracks-list"></ul>
+      </div>
+
+      <div id="stats-container" class="hidden">
+        <h3>Статистика:</h3>
+        <pre id="stats-data"></pre>
+      </div>
+    </section>
+
+    <script>
+      const BASE = '';
+      const uploadForm  = document.getElementById('upload-form');
+      const fileInput   = document.getElementById('file-input');
+      const uploadSec   = document.getElementById('upload-section');
+      const sessSec     = document.getElementById('session-section');
+      const sessIdSpan  = document.getElementById('session-id');
+      const videoImg    = document.getElementById('video');
+      const tracksList  = document.getElementById('tracks-list');
+      const statsCont   = document.getElementById('stats-container');
+      const statsPre    = document.getElementById('stats-data');
+      const btnStats    = document.getElementById('btn-stats');
+      const btnStop     = document.getElementById('btn-stop');
+      const errorDiv    = document.getElementById('error');
+
+      let sessionId = null;
+      let evtSource = null;
+
+      uploadForm.addEventListener('submit', async e => {
+        e.preventDefault();
+        errorDiv.textContent = '';
+
+        if (!fileInput.files.length) {
+          return alert('Выберите видео.');
+        }
+
+        try {
+          const fd = new FormData();
+          fd.append('file', fileInput.files[0]);
+          const res = await fetch(`${BASE}/track`, { method: 'POST', body: fd });
+
+          if (!res.ok){
+            throw new Error(res.status);
+          }
+
+          const { session_id } = await res.json();
+          sessionId = session_id;
+
+          sessIdSpan.textContent = sessionId;
+          uploadSec.classList.add('hidden');
+          sessSec.classList.remove('hidden');
+          statsCont.classList.add('hidden');
+
+          startSSE();
+        } catch (err) {
+          console.error(err);
+
+          errorDiv.textContent = 'Ошибка загрузки: ' + err.message;
+        }
+      });
+
+      function startSSE() {
+        evtSource = new EventSource(`${BASE}/track/${sessionId}/frames`);
+        evtSource.addEventListener('frame', e => {
+          try {
+            const { jpeg_b64, tracks } = JSON.parse(e.data);
+
+            videoImg.src = 'data:image/jpeg;base64,' + jpeg_b64;
+            tracksList.innerHTML = '';
+            tracks.forEach(t => {
+              const li = document.createElement('li');
+
+              li.textContent = `ID ${t.id}: [${t.bbox.join(', ')}]`;
+              tracksList.append(li);
+            });
+          } catch (err) {
+            console.error('Frame parse error', err);
+          }
+        });
+
+        evtSource.onerror = () => evtSource.close();
+      }
+
+      btnStats.addEventListener('click', async () => {
+        if (!sessionId) {
+          return;
+        }
+
+        try {
+          const res = await fetch(`${BASE}/stats/${sessionId}`);
+
+          if (!res.ok) {
+            throw new Error(res.status);
+          }
+
+          const data = await res.json();
+          statsPre.textContent = JSON.stringify(data, null, 2);
+          statsCont.classList.remove('hidden');
+        } catch (err) {
+          console.error(err);
+
+          errorDiv.textContent = 'Ошибка получения статистики';
+        }
+      });
+
+      btnStop.addEventListener('click', async () => {
+        if (!sessionId) return;
+        try {
+          const res = await fetch(`${BASE}/track/${sessionId}`, { method: 'DELETE' });
+
+          if (res.status !== 204) {
+            throw new Error(res.status);
+          }
+
+          evtSource.close();
+          resetUI();
+          alert('Сессия остановлена');
+        } catch (err) {
+          console.error(err);
+
+          errorDiv.textContent = 'Не удалось остановить сессию';
+        }
+      });
+
+      function resetUI() {
+        sessionId = null;
+        sessSec.classList.add('hidden');
+        uploadSec.classList.remove('hidden');
+        videoImg.src = '';
+        tracksList.innerHTML = '';
+        statsCont.classList.add('hidden');
+        errorDiv.textContent = '';
+      }
+    </script>
+  </body>
+</html>
