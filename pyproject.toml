@@ -14,7 +14,8 @@ dependencies = [
     "deep-sort-realtime (>=1.3.2,<2.0.0)",
     "sse-starlette (>=2.3.4,<3.0.0)",
     "opencv-python (>=4.11.0.86,<5.0.0.0)",
-    "python-multipart (>=0.0.20,<0.0.21)"
+    "python-multipart (>=0.0.20,<0.0.21)",
+    "av (>=14.3.0,<15.0.0)"
 ]
 
 

@@ -1,0 +1,9 @@
+services:
+  tracker:
+    build: .
+    container_name: person-tracker
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./static:/app/static
+    restart: unless-stopped

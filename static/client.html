@@ -1,179 +1,241 @@
 <!DOCTYPE html>
 <html lang="ru">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Person Tracker Client</title>
-    <style>
-      body { font-family: sans-serif; max-width: 800px; margin: 20px auto; }
+<head>
+  <meta charset="UTF-8" />
+  <title>Action-Aware Tracker Client</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 900px;
+      margin: 20px auto;
+    }
+    #error {
+      color: red;
+      min-height: 1.2em;
+      margin-bottom: 10px;
+    }
+    #controls, #extra-controls {
+      margin: 10px 0;
+    }
+    button {
+      margin-right: 8px;
+      padding: 6px 12px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      display: block;
+      margin-bottom: 10px;
+      max-width: 100%;
+    }
+    .hidden {
+      display: none;
+    }
+    ul, pre {
+      padding-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Person Tracker</h1>
+  <div id="error"></div>
 
-      #video { width: 100%; max-width: 640px; border: 1px solid #ccc; }
+  <div id="controls">
+    <input type="file" id="file-input" accept="video/*" />
+    <button id="btn-start">Download and start</button>
+    <button id="btn-stop" disabled>Stop</button>
+    <span>Session ID: <strong id="session-id">—</strong></span>
+  </div>
 
-      section { margin-top: 20px; }
+  <div id="extra-controls" class="hidden">
+    <button id="btn-last">Last tracks</button>
+    <button id="btn-stats">Statistics</button>
+    <button id="btn-events">Events History</button>
+  </div>
 
-      button { margin-right: 8px; padding: 6px 12px; }
+  <canvas id="canvas"></canvas>
+  <h3>Tracks and actions:</h3>
+  <ul id="live-tracks"></ul>
 
-      pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
+  <section id="last-section" class="hidden">
+    <h3>Last tracks</h3>
+    <ul id="last-list"></ul>
+  </section>
 
-      .hidden { display: none; }
+  <section id="stats-section" class="hidden">
+    <h3>Statistics:</h3>
+    <pre id="stats-pre"></pre>
+  </section>
 
-      #error { color: red; }
-    </style>
-  </head>
-  <body>
+  <section id="events-section" class="hidden">
+    <h3>History events:</h3>
+    <ul id="events-list"></ul>
+  </section>
 
-    <h1>Person Tracker Client</h1>
-    <div id="error"></div>
+  <script>
+    const fileInput     = document.getElementById('file-input')
+    const btnStart      = document.getElementById('btn-start')
+    const btnStop       = document.getElementById('btn-stop')
+    const sessionIdElem = document.getElementById('session-id')
+    const extraCtrls    = document.getElementById('extra-controls')
+    const btnLast       = document.getElementById('btn-last')
+    const btnStats      = document.getElementById('btn-stats')
+    const btnEvents     = document.getElementById('btn-events')
+    const canvas        = document.getElementById('canvas')
+    const ctx           = canvas.getContext('2d')
+    const liveTracks    = document.getElementById('live-tracks')
+    const errorDiv      = document.getElementById('error')
 
-    <section id="upload-section">
-      <form id="upload-form">
-        <input type="file" id="file-input" accept="video/*" required />
-        <button type="submit">Загрузить и старт</button>
-      </form>
-    </section>
+    const lastSection   = document.getElementById('last-section')
+    const lastList      = document.getElementById('last-list')
+    const statsSection  = document.getElementById('stats-section')
+    const statsPre      = document.getElementById('stats-pre')
+    const eventsSection = document.getElementById('events-section')
+    const eventsList    = document.getElementById('events-list')
 
-    <section id="session-section" class="hidden">
-      <p><strong>Session ID:</strong> <span id="session-id"></span></p>
-      <button id="btn-stats">Получить статистику</button>
-      <button id="btn-stop">Остановить сессию</button>
+    let sessionId = null
+    let evtSource = null
 
-      <div>
-        <h3>Live видеопоток:</h3>
-        <img id="video" alt="Live frame" />
-      </div>
-      <div>
-        <h3>Треки:</h3>
-        <ul id="tracks-list"></ul>
-      </div>
+    function hideAllResults() {
+      lastSection.classList.add('hidden')
+      statsSection.classList.add('hidden')
+      eventsSection.classList.add('hidden')
+    }
 
-      <div id="stats-container" class="hidden">
-        <h3>Статистика:</h3>
-        <pre id="stats-data"></pre>
-      </div>
-    </section>
+    function resetUI() {
+      sessionId = null
+      sessionIdElem.textContent = '—'
+      btnStop.disabled = true
+      extraCtrls.classList.add('hidden')
 
-    <script>
-      const BASE = '';
-      const uploadForm  = document.getElementById('upload-form');
-      const fileInput   = document.getElementById('file-input');
-      const uploadSec   = document.getElementById('upload-section');
-      const sessSec     = document.getElementById('session-section');
-      const sessIdSpan  = document.getElementById('session-id');
-      const videoImg    = document.getElementById('video');
-      const tracksList  = document.getElementById('tracks-list');
-      const statsCont   = document.getElementById('stats-container');
-      const statsPre    = document.getElementById('stats-data');
-      const btnStats    = document.getElementById('btn-stats');
-      const btnStop     = document.getElementById('btn-stop');
-      const errorDiv    = document.getElementById('error');
+      hideAllResults()
 
-      let sessionId = null;
-      let evtSource = null;
+      liveTracks.innerHTML = ''
 
-      uploadForm.addEventListener('submit', async e => {
-        e.preventDefault();
-        errorDiv.textContent = '';
+      if (evtSource) {
+        evtSource.close()
+        evtSource = null
+      }
 
-        if (!fileInput.files.length) {
-          return alert('Выберите видео.');
-        }
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+    }
 
+    btnStart.addEventListener('click', async () => {
+      errorDiv.textContent = ''
+
+      if (!fileInput.files[0]) {
+        errorDiv.textContent = 'Choose video.'
+        return
+      }
+
+      const form = new FormData()
+      form.append('file', fileInput.files[0])
+      try {
+        const res = await fetch('/track', { method: 'POST', body: form })
+        if (!res.ok) throw new Error(res.statusText)
+        const { session_id } = await res.json()
+        sessionId = session_id
+        sessionIdElem.textContent = sessionId
+        btnStop.disabled = false
+        extraCtrls.classList.remove('hidden')
+        hideAllResults()
+        startSSE()
+      } catch (err) {
+        console.error(err)
+        errorDiv.textContent = 'Start error: ' + err.message
+      }
+    })
+
+    btnStop.addEventListener('click', async () => {
+      if (!sessionId) return
+      try { await fetch(`/track/${sessionId}`, { method: 'DELETE' }) }
+      catch (_) {}
+      resetUI()
+    })
+
+    function startSSE() {
+      if (evtSource) evtSource.close()
+      evtSource = new EventSource(`/track/${sessionId}/frames`)
+      evtSource.onerror = () => console.warn('SSE closed')
+
+      evtSource.addEventListener('frame', e => {
         try {
-          const fd = new FormData();
-          fd.append('file', fileInput.files[0]);
-          const res = await fetch(`${BASE}/track`, { method: 'POST', body: fd });
-
-          if (!res.ok){
-            throw new Error(res.status);
-          }
-
-          const { session_id } = await res.json();
-          sessionId = session_id;
-
-          sessIdSpan.textContent = sessionId;
-          uploadSec.classList.add('hidden');
-          sessSec.classList.remove('hidden');
-          statsCont.classList.add('hidden');
-
-          startSSE();
-        } catch (err) {
-          console.error(err);
-
-          errorDiv.textContent = 'Ошибка загрузки: ' + err.message;
-        }
-      });
-
-      function startSSE() {
-        evtSource = new EventSource(`${BASE}/track/${sessionId}/frames`);
-        evtSource.addEventListener('frame', e => {
-          try {
-            const { jpeg_b64, tracks } = JSON.parse(e.data);
-
-            videoImg.src = 'data:image/jpeg;base64,' + jpeg_b64;
-            tracksList.innerHTML = '';
+          const { jpeg_b64, tracks } = JSON.parse(e.data)
+          const img = new Image()
+          img.onload = () => {
+            canvas.width  = img.width
+            canvas.height = img.height
+            ctx.drawImage(img, 0, 0)
+            liveTracks.innerHTML = ''
             tracks.forEach(t => {
-              const li = document.createElement('li');
-
-              li.textContent = `ID ${t.id}: [${t.bbox.join(', ')}]`;
-              tracksList.append(li);
-            });
-          } catch (err) {
-            console.error('Frame parse error', err);
+              const [x,y,w,h] = t.bbox
+              ctx.strokeStyle = 'lime'
+              ctx.lineWidth   = 2
+              ctx.strokeRect(x,y,w,h)
+              ctx.font = '24px sans-serif'
+              ctx.fillText(t.icon, x, y - 5)
+              const li = document.createElement('li')
+              li.textContent = `ID ${t.id}: ${t.action}`
+              liveTracks.append(li)
+            })
           }
-        });
+          img.src = 'data:image/jpeg;base64,' + jpeg_b64
+        } catch {}
+      })
+    }
 
-        evtSource.onerror = () => evtSource.close();
+    btnLast.addEventListener('click', async () => {
+      hideAllResults()
+      lastList.innerHTML = ''
+      try {
+        const res = await fetch(`/track/${sessionId}/data`)
+        if (!res.ok) throw new Error(res.statusText)
+        const { tracks } = await res.json()
+        tracks.forEach(t => {
+          const li = document.createElement('li')
+          li.textContent = `ID ${t.id}: bbox=[${t.bbox.join(',')}]`
+          lastList.append(li)
+        })
+        lastSection.classList.remove('hidden')
+      } catch (err) {
+        console.error(err)
+        errorDiv.textContent = 'error getting tracks'
       }
+    })
 
-      btnStats.addEventListener('click', async () => {
-        if (!sessionId) {
-          return;
-        }
-
-        try {
-          const res = await fetch(`${BASE}/stats/${sessionId}`);
-
-          if (!res.ok) {
-            throw new Error(res.status);
-          }
-
-          const data = await res.json();
-          statsPre.textContent = JSON.stringify(data, null, 2);
-          statsCont.classList.remove('hidden');
-        } catch (err) {
-          console.error(err);
-
-          errorDiv.textContent = 'Ошибка получения статистики';
-        }
-      });
-
-      btnStop.addEventListener('click', async () => {
-        if (!sessionId) return;
-        try {
-          const res = await fetch(`${BASE}/track/${sessionId}`, { method: 'DELETE' });
-
-          if (res.status !== 204) {
-            throw new Error(res.status);
-          }
-
-          evtSource.close();
-          resetUI();
-          alert('Сессия остановлена');
-        } catch (err) {
-          console.error(err);
-
-          errorDiv.textContent = 'Не удалось остановить сессию';
-        }
-      });
-
-      function resetUI() {
-        sessionId = null;
-        sessSec.classList.add('hidden');
-        uploadSec.classList.remove('hidden');
-        videoImg.src = '';
-        tracksList.innerHTML = '';
-        statsCont.classList.add('hidden');
-        errorDiv.textContent = '';
+    btnStats.addEventListener('click', async () => {
+      hideAllResults()
+      statsPre.textContent = ''
+      try {
+        const res = await fetch(`/stats/${sessionId}`)
+        if (!res.ok) throw new Error(res.statusText)
+        const data = await res.json()
+        statsPre.textContent = JSON.stringify(data, null, 2)
+        statsSection.classList.remove('hidden')
+      } catch (err) {
+        console.error(err)
+        errorDiv.textContent = 'error getting statistics'
       }
-    </script>
-  </body>
+    })
+
+    btnEvents.addEventListener('click', async () => {
+      hideAllResults()
+      eventsList.innerHTML = ''
+      try {
+        const res = await fetch(`/track/${sessionId}/events`)
+        if (!res.ok) throw new Error(res.statusText)
+        const evs = await res.json()
+        evs.forEach(ev => {
+          const dt = new Date(ev.timestamp * 1000).toLocaleString()
+          const li = document.createElement('li')
+          li.textContent = `[${dt}] ID ${ev.track_id}: ${ev.action}`
+          eventsList.append(li)
+        })
+        eventsSection.classList.remove('hidden')
+      } catch (err) {
+        console.error(err)
+        errorDiv.textContent = 'error getting events history'
+      }
+    })
+  </script>
+</body>
 </html>

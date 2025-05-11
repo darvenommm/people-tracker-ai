@@ -5,6 +5,7 @@ __pycache__/
 
 videos
 yolov8n.pt
+events.db
 
 # C extensions
 *.so
